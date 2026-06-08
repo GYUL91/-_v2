@@ -8,6 +8,9 @@
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
   <style>
     body{margin:0;background:#0f172a;color:#f1f5f9;}
     *{box-sizing:border-box;}
@@ -15,6 +18,62 @@
 </head>
 <body>
   <div id="root"></div>
+
+  <!-- ★ Firebase 설정 ★ Firebase 콘솔(console.firebase.google.com)에서 복사한 값으로 교체하세요 -->
+  <script>
+  const FIREBASE_CONFIG = {
+    apiKey: "YOUR_API_KEY",
+    authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+    projectId: "YOUR_PROJECT_ID",
+    storageBucket: "YOUR_PROJECT_ID.appspot.com",
+    messagingSenderId: "YOUR_SENDER_ID",
+    appId: "YOUR_APP_ID"
+  };
+
+  let _db = null;
+  try {
+    if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
+    _db = firebase.firestore();
+    console.log("✅ Firebase 연결 성공");
+  } catch(e) {
+    console.warn("⚠️ Firebase 연결 실패 (로컬 모드):", e.message);
+  }
+
+  window.FS = {
+    COL: "hr_megaline",
+    async set(docName, data) {
+      if (!_db) return;
+      try { await _db.collection(this.COL).doc(docName).set(data, {merge: true}); }
+      catch(e) { console.warn("Firestore 저장 오류:", e); }
+    },
+    async get(docName) {
+      if (!_db) return null;
+      try {
+        const snap = await _db.collection(this.COL).doc(docName).get();
+        return snap.exists ? snap.data() : null;
+      } catch(e) { console.warn("Firestore 읽기 오류:", e); return null; }
+    }
+  };
+
+  // localStorage.setItem 인터셉터: hr_ 키는 Firestore에도 자동 동기화
+  const _origSet = localStorage.setItem.bind(localStorage);
+  localStorage.setItem = function(key, value) {
+    _origSet(key, value);
+    if (key.startsWith("hr_") && _db) {
+      const payload = {}; payload[key] = value;
+      _db.collection("hr_megaline").doc("settings").set(payload, {merge:true}).catch(()=>{});
+    }
+  };
+  const _origRemove = localStorage.removeItem.bind(localStorage);
+  localStorage.removeItem = function(key) {
+    _origRemove(key);
+    if (key.startsWith("hr_") && _db) {
+      const payload = {}; payload[key] = null;
+      _db.collection("hr_megaline").doc("settings").set(payload, {merge:true}).catch(()=>{});
+    }
+  };
+  </script>
+
   <script type="text/babel" data-presets="react">
 const {useState,useEffect}=React;
 
@@ -4340,38 +4399,110 @@ function App() {
   // 모듈 레벨 _people 동기화
   useEffect(()=>{ _people = allPeople; },[allPeople]);
 
-  // 앱 로드 시 저장 데이터 복원
+  // 앱 로드 시 저장 데이터 복원 (Firestore 우선, localStorage 폴백)
   useEffect(() => {
-    try {
-      const ra = localStorage.getItem("hr_assignments");
-      const rl = localStorage.getItem("hr_leader_comp");
-      const rm = localStorage.getItem("hr_member_comp");
-      const rw = localStorage.getItem("hr_weights");
-      const rkc = localStorage.getItem("hr_kpi_chain");
-      const raa = localStorage.getItem("hr_ach_assignments");
-      const raw = localStorage.getItem("hr_ach_weights");
-      const rs = localStorage.getItem("hr_seasons");
-      const rc = localStorage.getItem("hr_current_season_id");
-      const rx = localStorage.getItem("hr_season_archive");
-      if (ra) setAssignments(JSON.parse(ra));
-      if (rl) setLeaderCompetencies(JSON.parse(rl));
-      if (rm) setMemberCompetencies(JSON.parse(rm));
-      if (rw) setWeights(JSON.parse(rw));
-      if (rkc) setKpiChain(JSON.parse(rkc));
-      if (raa) setAchAssignments(JSON.parse(raa));
-      if (raw) setAchWeights(JSON.parse(raw));
-      if (rs) setSeasons(JSON.parse(rs));
-      if (rc) { setCurrentSeasonId(rc); setAdminViewSeasonId(rc); }
-      if (rx) setSeasonArchive(JSON.parse(rx));
-      if (ra) {
-        setToast("저장된 데이터를 불러왔습니다.");
-        setTimeout(()=>setToast(""),3000);
+    async function loadData() {
+      try {
+        // ── 1. Firestore에서 설정 로드 ──────────────────────
+        const fsSettings = await window.FS.get("settings");
+        if (fsSettings) {
+          const p = k => { try { const v=fsSettings[k]; return v&&v!=="null"?JSON.parse(v):null; } catch(e){return null;} };
+          const ra=p("hr_assignments"), rl=p("hr_leader_comp"), rm=p("hr_member_comp");
+          const rw=p("hr_weights"), rkc=p("hr_kpi_chain"), raa=p("hr_ach_assignments");
+          const raw=p("hr_ach_weights"), rs=p("hr_seasons"), rc=fsSettings["hr_current_season_id"];
+          const rx=p("hr_season_archive");
+          if(ra){setAssignments(ra);} if(rl){setLeaderCompetencies(rl);} if(rm){setMemberCompetencies(rm);}
+          if(rw){setWeights(rw);} if(rkc){setKpiChain(rkc);} if(raa){setAchAssignments(raa);}
+          if(raw){setAchWeights(raw);} if(rs){setSeasons(rs);}
+          if(rc){setCurrentSeasonId(rc);setAdminViewSeasonId(rc);}
+          if(rx){setSeasonArchive(rx);}
+        } else {
+          // Firestore에 없으면 localStorage 폴백
+          const ra=localStorage.getItem("hr_assignments");
+          const rl=localStorage.getItem("hr_leader_comp"); const rm=localStorage.getItem("hr_member_comp");
+          const rw=localStorage.getItem("hr_weights"); const rkc=localStorage.getItem("hr_kpi_chain");
+          const raa=localStorage.getItem("hr_ach_assignments"); const raw=localStorage.getItem("hr_ach_weights");
+          const rs=localStorage.getItem("hr_seasons"); const rc=localStorage.getItem("hr_current_season_id");
+          const rx=localStorage.getItem("hr_season_archive");
+          if(ra){setAssignments(JSON.parse(ra));} if(rl){setLeaderCompetencies(JSON.parse(rl));}
+          if(rm){setMemberCompetencies(JSON.parse(rm));} if(rw){setWeights(JSON.parse(rw));}
+          if(rkc){setKpiChain(JSON.parse(rkc));} if(raa){setAchAssignments(JSON.parse(raa));}
+          if(raw){setAchWeights(JSON.parse(raw));} if(rs){setSeasons(JSON.parse(rs));}
+          if(rc){setCurrentSeasonId(rc);setAdminViewSeasonId(rc);} if(rx){setSeasonArchive(JSON.parse(rx));}
+        }
+        // ── 2. Firestore에서 인메모리 데이터 로드 ─────────
+        const fsScores   = await window.FS.get("scores");
+        const fsProgress = await window.FS.get("progress");
+        const fsEssays   = await window.FS.get("essays");
+        const fsUsers    = await window.FS.get("users");
+        const fsPeople   = await window.FS.get("people");
+        const fsKpi      = await window.FS.get("kpi");
+        const fsGrowth   = await window.FS.get("growth");
+        if(fsScores?.data)   setScores(fsScores.data);
+        if(fsProgress?.data) setProgressRows(fsProgress.data);
+        if(fsEssays?.data)   setEssayAnswers(fsEssays.data);
+        if(fsUsers?.data)    setUsers(fsUsers.data);
+        if(fsPeople?.data)   setAllPeople(fsPeople.data);
+        if(fsKpi) {
+          if(fsKpi.kpiItems)    setKpiItems(fsKpi.kpiItems);
+          if(fsKpi.kpiApproval) setKpiApproval(fsKpi.kpiApproval);
+          if(fsKpi.kpiSelfText) setKpiSelfText(fsKpi.kpiSelfText);
+          if(fsKpi.achScores)   setAchScores(fsKpi.achScores);
+          if(fsKpi.achProgress) setAchProgress(fsKpi.achProgress);
+        }
+        if(fsGrowth) {
+          if(fsGrowth.growthSelections) setGrowthSelections(fsGrowth.growthSelections);
+          if(fsGrowth.growthOptions)    setGrowthOptions(fsGrowth.growthOptions);
+        }
+        if(fsSettings||fsScores) {
+          setToast("☁️ 클라우드에서 데이터를 불러왔습니다.");
+          setTimeout(()=>setToast(""),3000);
+        }
+      } catch(e) {
+        console.warn("클라우드 로드 오류:", e);
+      } finally {
+        setStorageLoaded(true);
       }
-    } catch (e) {
-    } finally {
-      setStorageLoaded(true);
     }
+    loadData();
   }, []);
+
+  // ── 인메모리 상태 → Firestore 자동 동기화 (디바운스 1.5초) ──
+  useEffect(()=>{
+    if(!storageLoaded) return;
+    const t=setTimeout(()=>{ window.FS.set("scores",{data:scores}); },1500);
+    return()=>clearTimeout(t);
+  },[scores,storageLoaded]);
+  useEffect(()=>{
+    if(!storageLoaded) return;
+    const t=setTimeout(()=>{ window.FS.set("progress",{data:progressRows}); },1500);
+    return()=>clearTimeout(t);
+  },[progressRows,storageLoaded]);
+  useEffect(()=>{
+    if(!storageLoaded) return;
+    const t=setTimeout(()=>{ window.FS.set("essays",{data:essayAnswers}); },1500);
+    return()=>clearTimeout(t);
+  },[essayAnswers,storageLoaded]);
+  useEffect(()=>{
+    if(!storageLoaded) return;
+    const t=setTimeout(()=>{ window.FS.set("users",{data:users}); },1500);
+    return()=>clearTimeout(t);
+  },[users,storageLoaded]);
+  useEffect(()=>{
+    if(!storageLoaded) return;
+    const t=setTimeout(()=>{ window.FS.set("people",{data:allPeople}); },1500);
+    return()=>clearTimeout(t);
+  },[allPeople,storageLoaded]);
+  useEffect(()=>{
+    if(!storageLoaded) return;
+    const t=setTimeout(()=>{ window.FS.set("kpi",{kpiItems,kpiApproval,kpiSelfText,achScores,achProgress}); },1500);
+    return()=>clearTimeout(t);
+  },[kpiItems,kpiApproval,kpiSelfText,achScores,achProgress,storageLoaded]);
+  useEffect(()=>{
+    if(!storageLoaded) return;
+    const t=setTimeout(()=>{ window.FS.set("growth",{growthSelections,growthOptions}); },1500);
+    return()=>clearTimeout(t);
+  },[growthSelections,growthOptions,storageLoaded]);
 
   const activePeople = allPeople.filter(p=>p.empStatus==="재직");
   const activeTargets = activePeople.filter(p=>p.empNo.startsWith("a"));
