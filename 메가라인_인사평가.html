@@ -4411,11 +4411,13 @@ function App() {
           const rw=p("hr_weights"), rkc=p("hr_kpi_chain"), raa=p("hr_ach_assignments");
           const raw=p("hr_ach_weights"), rs=p("hr_seasons"), rc=fsSettings["hr_current_season_id"];
           const rx=p("hr_season_archive");
+          const rfw=p("hr_final_weights"), rgo=p("hr_growth_options");
           if(ra){setAssignments(ra);} if(rl){setLeaderCompetencies(rl);} if(rm){setMemberCompetencies(rm);}
           if(rw){setWeights(rw);} if(rkc){setKpiChain(rkc);} if(raa){setAchAssignments(raa);}
           if(raw){setAchWeights(raw);} if(rs){setSeasons(rs);}
           if(rc){setCurrentSeasonId(rc);setAdminViewSeasonId(rc);}
           if(rx){setSeasonArchive(rx);}
+          if(rfw){setFinalWeights(rfw);} if(rgo){setGrowthOptions(rgo);}
         } else {
           // Firestore에 없으면 localStorage 폴백
           const ra=localStorage.getItem("hr_assignments");
@@ -4424,10 +4426,12 @@ function App() {
           const raa=localStorage.getItem("hr_ach_assignments"); const raw=localStorage.getItem("hr_ach_weights");
           const rs=localStorage.getItem("hr_seasons"); const rc=localStorage.getItem("hr_current_season_id");
           const rx=localStorage.getItem("hr_season_archive");
+          const rfw=localStorage.getItem("hr_final_weights"); const rgo=localStorage.getItem("hr_growth_options");
           if(ra){setAssignments(JSON.parse(ra));} if(rl){setLeaderCompetencies(JSON.parse(rl));}
           if(rm){setMemberCompetencies(JSON.parse(rm));} if(rw){setWeights(JSON.parse(rw));}
           if(rkc){setKpiChain(JSON.parse(rkc));} if(raa){setAchAssignments(JSON.parse(raa));}
           if(raw){setAchWeights(JSON.parse(raw));} if(rs){setSeasons(JSON.parse(rs));}
+          if(rfw){setFinalWeights(JSON.parse(rfw));} if(rgo){setGrowthOptions(JSON.parse(rgo));}
           if(rc){setCurrentSeasonId(rc);setAdminViewSeasonId(rc);} if(rx){setSeasonArchive(JSON.parse(rx));}
         }
         // ── 2. Firestore에서 인메모리 데이터 로드 ─────────
