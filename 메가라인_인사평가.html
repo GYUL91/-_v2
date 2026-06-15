@@ -1562,7 +1562,6 @@ function EvaluationResults({activeTargets,progressRows,assignments,leaderCompete
                     </thead>
                     <tbody className="divide-y divide-slate-50">
                       {rankData.map(({t,total,maxTot,pct},idx)=>{
-                        const grade=pct!==null?GRADE_MAP(pct):null;
                         const isTop=idx<3;
                         return (
                           <tr key={t.empNo} className={isTop?"bg-amber-50/40 hover:bg-amber-50":"hover:bg-slate-700"}>
@@ -1619,7 +1618,6 @@ function EvaluationResults({activeTargets,progressRows,assignments,leaderCompete
               const wtSum=Object.values(wt).reduce((a,b)=>a+b,0);
               const weightedTotal=getWeightedTotal(scores,progressRows,selTarget.empNo,comps2,wt);
               const pct=weightedTotal!==null?+(weightedTotal/maxTotal2*100).toFixed(1):null;
-              const grade=pct!==null?GRADE_MAP(pct):null;
 
               // 단계별 기여
               const stageContribs=["본인진단",...STAGES].map(st=>{
@@ -1678,12 +1676,6 @@ function EvaluationResults({activeTargets,progressRows,assignments,leaderCompete
                           <div className="text-5xl font-black text-white tracking-tight">{weightedTotal!==null?weightedTotal:"—"}</div>
                           <div className="text-indigo-300 text-xs mt-1">/ {maxTotal2}점</div>
                         </div>
-                        {grade&&(
-                          <div className="rounded-2xl px-5 py-3 text-center" style={{background:grade.bg}}>
-                            <div className="text-3xl font-black" style={{color:grade.tc}}>{grade.label}</div>
-                            <div className="text-xs font-semibold mt-0.5" style={{color:grade.tc}}>{pct}%</div>
-                          </div>
-                        )}
                       </div>
                     </div>
                   </div>
