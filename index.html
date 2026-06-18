@@ -289,6 +289,67 @@ function getQStageAvg(scores,progressRows,targetEmpNo,stage,compTitle,qi) {
 
 
 // ── 가중치 종합점수 ────────────────────────────────────────────────────────────
+function computeBiasAdj(scores,progressRows,activeTargets,leaderCompetencies,memberCompetencies) {
+  var adj={};
+  for(var ti=0;ti<activeTargets.length;ti++){
+    var tgt=activeTargets[ti];
+    var comps=getComps(getPerson(tgt.empNo).title,leaderCompetencies,memberCompetencies);
+    adj[tgt.empNo]={};
+    for(var si=0;si<STAGES.length;si++){
+      var st=STAGES[si];
+      var row=getRow(progressRows,tgt.empNo,st);
+      var evs=row?.completedBy||[];
+      for(var ei=0;ei<evs.length;ei++){
+        var ev=evs[ei];
+        var t=0,ok=true;
+        for(var ci=0;ci<comps.length;ci++){
+          var comp=comps[ci];
+          if(comp.type==="essay"){var s=scores[SK(tgt.empNo,st,ev,comp.title,"essay")];if(s==null){ok=false;break;}t+=s;}
+          else{var vs=(comp.questions||[]).map(function(_,qi){return scores[SK(tgt.empNo,st,ev,comp.title,qi)];}).filter(function(v){return v!=null;});if(vs.length!==(comp.questions||[]).length){ok=false;break;}t+=vs.reduce(function(a,b){return a+b;},0);}
+        }
+        if(ok){if(!adj[tgt.empNo][ev])adj[tgt.empNo][ev]={};adj[tgt.empNo][ev][st]=t;}
+      }
+    }
+  }
+  var evStageMap={};
+  for(var ti=0;ti<activeTargets.length;ti++){
+    var tgt=activeTargets[ti];
+    for(var ev in adj[tgt.empNo]){
+      for(var st in adj[tgt.empNo][ev]){
+        var key=ev+"||"+st;
+        if(!evStageMap[key])evStageMap[key]=[];
+        evStageMap[key].push({empNo:tgt.empNo,raw:adj[tgt.empNo][ev][st]});
+      }
+    }
+  }
+  var stageScores={};
+  for(var key in evStageMap){
+    var st=key.split("||")[1];
+    if(!stageScores[st])stageScores[st]=[];
+    evStageMap[key].forEach(function(x){stageScores[st].push(x.raw);});
+  }
+  function mean(arr){return arr.reduce(function(a,b){return a+b;},0)/arr.length;}
+  function stdevp(arr){var m=mean(arr);return Math.sqrt(arr.reduce(function(a,b){return a+Math.pow(b-m,2);},0)/arr.length);}
+  var result={};
+  for(var key in evStageMap){
+    var parts=key.split("||");var ev=parts[0];var st=parts[1];
+    var evScores=evStageMap[key];
+    if(evScores.length<2)continue;
+    var allSt=stageScores[st]||[];
+    if(allSt.length<2)continue;
+    var evMean=mean(evScores.map(function(x){return x.raw;}));
+    var evStd=stdevp(evScores.map(function(x){return x.raw;}));
+    var ovMean=mean(allSt);var ovStd=stdevp(allSt);
+    evScores.forEach(function(x){
+      if(!result[x.empNo])result[x.empNo]={};
+      if(!result[x.empNo][st])result[x.empNo][st]={};
+      var adjusted=(evStd>0)?+(ovMean+((x.raw-evMean)*ovStd/evStd)).toFixed(1):x.raw;
+      result[x.empNo][st][ev]={raw:x.raw,adjusted:adjusted,evMean:+evMean.toFixed(1),evStd:+evStd.toFixed(2),ovMean:+ovMean.toFixed(1),ovStd:+ovStd.toFixed(2)};
+    });
+  }
+  return result;
+}
+
 function getWeightedTotal(scores,progressRows,targetEmpNo,competencies,weights) {
   const maxTotal = competencies.filter(c=>c.type!=="essay").reduce((a,c)=>a+(c.questions?.length||0)*4,0)
     + competencies.filter(c=>c.type==="essay").reduce((a,c)=>a+(c.maxScore||30),0);
@@ -1452,6 +1513,7 @@ function RadarChart({data,labels,maxVal,size=220}) {
 // ── 평가 결과 컴포넌트 ──────────────────────────────────────────────────────────
 function EvaluationResults({activeTargets,progressRows,assignments,leaderCompetencies,memberCompetencies,scores,selectedResultTarget,setSelectedResultTarget,weights}) {
   const [stageFilter,setStageFilter] = useState("all");
+  const biasAdj = React.useMemo(()=>computeBiasAdj(scores,progressRows,activeTargets,leaderCompetencies,memberCompetencies),[scores,progressRows,activeTargets,leaderCompetencies,memberCompetencies]);
   const [showRanking,setShowRanking] = useState(false);
   const ALL_STAGES_R = ["본인진단",...STAGES];
   const ALL_FILTER_OPTIONS = ["all",...ALL_STAGES_R,"종합결과"];
@@ -1891,8 +1953,9 @@ function EvaluationResults({activeTargets,progressRows,assignments,leaderCompete
                           </td>
                           {evaluators.map(ev=>{
                             const total=getEvTotal(stage,ev);
+                            const adjData=biasAdj[selTarget.empNo]?.[stage]?.[ev];
                             return <td key={ev} className="py-2 px-3 text-center">
-                              {total!==null?<><span className="font-bold text-slate-100">{total}</span><span className="text-slate-400 text-[10px]">/{totalMaxScore}</span></>:<span className="text-slate-300">-</span>}
+                              {total!==null?(<><span className="font-bold text-slate-100">{adjData?adjData.adjusted:total}</span><span className="text-slate-400 text-[10px]">/{totalMaxScore}</span>{adjData&&adjData.adjusted!==total&&<div className="text-[10px] text-slate-500">원{total}</div>}</>):<span className="text-slate-300">-</span>}
                             </td>;
                           })}
                         </tr>
@@ -2038,7 +2101,8 @@ function AdminView({assignments,setAssignments,progressRows,setProgressRows,
   weights,setWeights,seasons,currentSeasonId,adminViewSeasonId,setAdminViewSeasonId,seasonArchive,closeSeason,startNewSeason,reopenSeason,deleteSeason,exportSettings,importSettings,
   evalType,kpiChain,setKpiChain,kpiApproval,kpiItems,achProgress,achScores,achWeights,setAchWeights,
   achAssignments,setAchAssignments,finalWeights,setFinalWeights,essayAnswers,
-  growthOptions,setGrowthOptions,growthSelections,setGrowthSelections}) {
+  growthOptions,setGrowthOptions,growthSelections,setGrowthSelections,
+  kpiTemplate,setKpiTemplate,contributions,setContributions}) {
 
   const [tab,setTab] = useState("employees");
   const [search,setSearch] = useState("");
@@ -2328,7 +2392,7 @@ function AdminView({assignments,setAssignments,progressRows,setProgressRows,
 
         {/* 공통 탭바 */}
         {evalType==="공통"&&<div className="border-b border-slate-700 bg-slate-800 px-6 py-3 flex items-center gap-2 flex-wrap">
-          {[["employees","🏢 임직원 관리"],["season","🗓 시즌 관리"],["finalWeights","⚖ 가중치 설정"],["finalResults","🏆 인사평가 결과"]].map(([k,l])=>(
+          {[["employees","🏢 임직원 관리"],["season","🗓 시즌 관리"],["finalWeights","⚖ 가중치 설정"],["contributions","🌟 공헌도 관리"],["finalResults","🏆 인사평가 결과"]].map(([k,l])=>(
             <button key={k} onClick={()=>tryChangeTab(k)}
               className={`rounded-xl px-4 py-2 text-sm font-semibold transition relative ${tab===k?"bg-slate-900 text-white":"bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>
               {l}{isDirtyTab(k)&&<DirtyDot/>}
@@ -2339,7 +2403,7 @@ function AdminView({assignments,setAssignments,progressRows,setProgressRows,
 
         {/* ── 업적평가 관리자 뷰 ── */}
         {evalType==="업적"&&(()=>{
-          const achTabs=[["achDashboard","📊 진행현황"],["kpiChainConfig","🔗 KPI 컨펌체인"],["kpiManage","📋 KPI 관리"],["growthAdmin","🌱 성장평가 관리"],["achMatching","👤 평가자 매칭"],["achResults","📋 업적 결과"]];
+          const achTabs=[["achDashboard","📊 진행현황"],["kpiChainConfig","🔗 KPI 컨펌체인"],["kpiTemplate","📐 KPI 항목 설정"],["kpiManage","📋 KPI 관리"],["growthAdmin","🌱 성장평가 관리"],["achMatching","👤 평가자 매칭"],["achResults","📋 업적 결과"]];
           return (
             <div className="flex flex-1 flex-col overflow-hidden">
               <div className="border-b border-slate-700 bg-slate-800 px-6 py-3 flex items-center gap-2 flex-wrap">
@@ -2561,6 +2625,49 @@ function AdminView({assignments,setAssignments,progressRows,setProgressRows,
                 {achAdminTab==="growthAdmin"&&(
                   <GrowthAdminPanel growthOptions={growthOptions} setGrowthOptions={setGrowthOptions}
                     growthSelections={growthSelections} activeTargets={activeTargets} showToast={showToast}/>
+                )}
+                {achAdminTab==="kpiTemplate"&&(
+                  <div className="flex-1 overflow-y-auto p-6">
+                    <div className="max-w-3xl mx-auto space-y-4">
+                      <div className="flex items-center justify-between">
+                        <h2 className="text-lg font-bold text-slate-100">📐 KPI 항목 설정</h2>
+                        <p className="text-xs text-slate-400">피평가자가 입력할 KPI 항목 구조를 설정합니다.</p>
+                      </div>
+                      <div className="rounded-2xl border border-slate-700/50 bg-slate-800 p-5 space-y-3">
+                        {(kpiTemplate.items||[]).map((item,idx)=>(
+                          <div key={idx} className="flex gap-2 items-start bg-slate-900/40 rounded-xl p-3">
+                            <div className="flex-shrink-0 w-6 h-6 rounded-full bg-indigo-600 text-white text-xs flex items-center justify-center font-bold mt-1">{idx+1}</div>
+                            <div className="flex-1 space-y-2">
+                              <div className="flex gap-2 items-center">
+                                <span className="text-xs text-slate-400 w-12">배점</span>
+                                <input type="number" min="1" max="100" value={item.weight}
+                                  onChange={e=>{const w=Number(e.target.value)||0;setKpiTemplate(p=>{const arr=[...p.items];arr[idx]={...arr[idx],weight:w};return{items:arr};});}}
+                                  className="w-20 bg-slate-700 text-white text-xs rounded-lg px-2 py-1 border border-slate-600"/>
+                                <span className="text-xs text-slate-400">점</span>
+                                <span className="text-xs text-slate-500 ml-2">합계: {(kpiTemplate.items||[]).reduce((s,i)=>s+i.weight,0)}점</span>
+                              </div>
+                              <div className="flex gap-2 items-start">
+                                <span className="text-xs text-slate-400 w-12 mt-1">안내문구</span>
+                                <textarea value={item.hint||""}
+                                  onChange={e=>{const h=e.target.value;setKpiTemplate(p=>{const arr=[...p.items];arr[idx]={...arr[idx],hint:h};return{items:arr};});}}
+                                  placeholder="피평가자에게 보여줄 작성 안내를 입력하세요."
+                                  className="flex-1 bg-slate-700 text-white text-xs rounded-lg px-2 py-1 border border-slate-600 resize-none h-14"/>
+                              </div>
+                            </div>
+                            <button onClick={()=>setKpiTemplate(p=>({items:p.items.filter((_,i)=>i!==idx)}))}
+                              className="text-slate-500 hover:text-red-400 text-xs px-2 py-1 transition">✕</button>
+                          </div>
+                        ))}
+                        <button onClick={()=>setKpiTemplate(p=>({items:[...p.items,{weight:10,hint:""}]}))}
+                          className="w-full rounded-xl border border-dashed border-slate-600 text-slate-400 hover:text-slate-200 hover:border-slate-400 text-xs py-2 transition">
+                          + 항목 추가
+                        </button>
+                      </div>
+                      {(kpiTemplate.items||[]).length>0&&(
+                        <p className="text-xs text-slate-500">* 저장은 자동으로 됩니다. 피평가자가 KPI 설정 시 이 항목 구조대로 입력합니다.</p>
+                      )}
+                    </div>
+                  </div>
                 )}
                 {achAdminTab==="achResults"&&(()=>{
                   const achRows=activeTargets.map(t=>{
@@ -3207,13 +3314,53 @@ function AdminView({assignments,setAssignments,progressRows,setProgressRows,
         {evalType==="공통"&&tab==="finalWeights"&&(
           <FinalWeightSetup activeTargets={activeTargets} finalWeights={finalWeights} setFinalWeights={setFinalWeights} showToast={showToast}/>
         )}
+        {evalType==="공통"&&tab==="contributions"&&(
+          <div className="flex-1 overflow-y-auto p-6">
+            <div className="max-w-3xl mx-auto">
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-lg font-bold text-slate-100">🌟 공헌도 관리</h2>
+                <p className="text-xs text-slate-400">관리자가 직접 1~5점 공헌도 가산점을 부여합니다.</p>
+              </div>
+              <div className="rounded-2xl border border-slate-700/50 bg-slate-800 overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-900/60"><tr>
+                    {["이름","부서/직책","공헌도 점수","액션"].map(h=><th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-400">{h}</th>)}
+                  </tr></thead>
+                  <tbody className="divide-y divide-slate-700/30">
+                    {activeTargets.map(t=>(
+                      <tr key={t.empNo} className="hover:bg-slate-700/20">
+                        <td className="px-4 py-3 font-semibold text-slate-200">{t.name}</td>
+                        <td className="px-4 py-3 text-xs text-slate-400">{t.dept} · {t.title}</td>
+                        <td className="px-4 py-3">
+                          {contributions[t.empNo]!=null
+                            ?<span className="font-bold text-amber-400 text-lg">+{contributions[t.empNo]}점</span>
+                            :<span className="text-slate-600 text-xs">미부여</span>}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex gap-1 flex-wrap">
+                            {[null,1,2,3,4,5].map(v=>(
+                              <button key={v??0} onClick={()=>setContributions(p=>({...p,[t.empNo]:v}))}
+                                className={"rounded-lg px-3 py-1 text-xs font-semibold transition "+(contributions[t.empNo]===v?"bg-amber-500 text-black":"bg-slate-700 text-slate-300 hover:bg-slate-600")}>
+                                {v===null?"미부여":"+"+v}
+                              </button>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
         {evalType==="공통"&&tab==="finalResults"&&(
           <FinalResultsDashboard activeTargets={activeTargets} finalWeights={finalWeights}
             scores={scores} progressRows={progressRows} assignments={assignments}
             leaderCompetencies={leaderCompetencies} memberCompetencies={memberCompetencies}
             weights={weights} achScores={achScores} achProgress={achProgress}
             kpiItems={kpiItems} achWeights={achWeights} essayAnswers={essayAnswers}
-            growthSelections={growthSelections}/>
+            growthSelections={growthSelections} contributions={contributions}/>
         )}
       </div>
         )}
@@ -3315,19 +3462,50 @@ function FinalResultsDashboard(props) {
   var leaderCompetencies=props.leaderCompetencies, memberCompetencies=props.memberCompetencies;
   var weights=props.weights, achScores=props.achScores, achProgress=props.achProgress;
   var kpiItems=props.kpiItems, achWeights=props.achWeights, growthSelections=props.growthSelections||{};
+  var contributions=props.contributions||{};
   var selState=useState(null);
   var selEmpNo=selState[0], setSelEmpNo=selState[1];
+  var biasAdj=computeBiasAdj(scores,progressRows,activeTargets,leaderCompetencies,memberCompetencies);
 
   function getCompMax(comps){
     return comps.filter(function(c){return c.type!=="essay";}).reduce(function(a,c){return a+(c.questions?c.questions.length:0)*4;},0)
       +comps.filter(function(c){return c.type==="essay";}).reduce(function(a,c){return a+(c.maxScore||30);},0);
   }
   function getAchMax(empNo){return (kpiItems[empNo]||[]).reduce(function(a,i){return a+(i.weight||0);},0);}
+  function getWeightedTotalAdjusted(empNo,comps,wts){
+    var maxTotal=comps.filter(function(c){return c.type!=="essay";}).reduce(function(a,c){return a+(c.questions?c.questions.length:0)*4;},0)+comps.filter(function(c){return c.type==="essay";}).reduce(function(a,c){return a+(c.maxScore||30);},0);
+    if(!maxTotal) return null;
+    var wsum=0,wtotal=0;
+    var allSt=["본인진단",...STAGES];
+    for(var si=0;si<allSt.length;si++){
+      var st=allSt[si];var w=wts[st]||0;if(!w)continue;
+      var evs;
+      if(st==="본인진단"){var sdRow=getRow(progressRows,empNo,"본인진단");evs=sdRow?.status==="완료"?[empNo]:[];}
+      else{evs=getRow(progressRows,empNo,st)?.completedBy||[];}
+      if(!evs.length)continue;
+      var totals=evs.map(function(ev){
+        var adjData=(biasAdj[empNo]&&biasAdj[empNo][st]&&biasAdj[empNo][st][ev]);
+        if(adjData)return adjData.adjusted;
+        var t=0,ok=true;
+        for(var ci=0;ci<comps.length;ci++){var comp=comps[ci];
+          if(comp.type==="essay"){var s=scores[SK(empNo,st,ev,comp.title,"essay")];if(s==null){ok=false;break;}t+=s;}
+          else{var vs=(comp.questions||[]).map(function(_,qi){return scores[SK(empNo,st,ev,comp.title,qi)];}).filter(function(v){return v!=null;});if(vs.length!==(comp.questions||[]).length){ok=false;break;}t+=vs.reduce(function(a,b){return a+b;},0);}
+        }
+        return ok?t:null;
+      }).filter(function(v){return v!==null;});
+      if(!totals.length)continue;
+      wsum+=(totals.reduce(function(a,b){return a+b;},0)/totals.length)*(w/100);wtotal+=w;
+    }
+    if(!wtotal)return null;
+    return +wsum.toFixed(1);
+  }
   function calcFinal(empNo){
     var comps=getComps(getPerson(empNo).title,leaderCompetencies,memberCompetencies);
+    var compAdj=getWeightedTotalAdjusted(empNo,comps,getPersonWeights(weights,empNo));
     var compRaw=getWeightedTotal(scores,progressRows,empNo,comps,getPersonWeights(weights,empNo));
     var compMax=getCompMax(comps);
-    var compPct=(compMax&&compRaw!=null)?(compRaw/compMax*100):null;
+    var compPctRaw=(compMax&&compRaw!=null)?(compRaw/compMax*100):null;
+    var compPct=(compMax&&compAdj!=null)?(compAdj/compMax*100):compPctRaw;
     var achRaw=getAchWeightedTotal(achScores,achProgress,kpiItems,empNo,achWeights);
     var achMax=getAchMax(empNo);
     var achPct=(achMax&&achRaw!=null)?(achRaw/achMax*100):null;
@@ -3336,13 +3514,14 @@ function FinalResultsDashboard(props) {
     if(compPct!=null&&achPct!=null) fin=+(compPct*(fw.comp/100)+achPct*(fw.ach/100)).toFixed(1);
     else if(compPct!=null) fin=+compPct.toFixed(1);
     else if(achPct!=null) fin=+achPct.toFixed(1);
-    var growthScore=(growthSelections[empNo]||{}).status==="완료"&&(growthSelections[empNo]||{}).score!=null?(growthSelections[empNo]||{}).score:null;
-    var finalWithGrowth=fin!=null?+(fin+(growthScore||0)).toFixed(1):null;
-    return {compPct:compPct!=null?+compPct.toFixed(1):null,achPct:achPct!=null?+achPct.toFixed(1):null,fin:fin,growthScore:growthScore,finalWithGrowth:finalWithGrowth,fw:fw};
+    var gs_=(growthSelections[empNo]||{});var growthScore=gs_.status==="완료"&&gs_.score!=null&&gs_.selfDiagStatus!=="미완료"?gs_.score:null;
+    var contributionScore=contributions[empNo]!=null?contributions[empNo]:null;
+    var finalWithGrowth=fin!=null?+(fin+(growthScore||0)+(contributionScore||0)).toFixed(1):null;
+    return {compPct:compPct!=null?+compPct.toFixed(1):null,compPctRaw:compPctRaw!=null?+compPctRaw.toFixed(1):null,achPct:achPct!=null?+achPct.toFixed(1):null,fin:fin,growthScore:growthScore,contributionScore:contributionScore,finalWithGrowth:finalWithGrowth,fw:fw};
   }
   var ranked=activeTargets.map(function(t){
     var res=calcFinal(t.empNo);
-    return {empNo:t.empNo,name:t.name,dept:t.dept,title:t.title,compPct:res.compPct,achPct:res.achPct,fin:res.fin,growthScore:res.growthScore,finalWithGrowth:res.finalWithGrowth,fw:res.fw};
+    return {empNo:t.empNo,name:t.name,dept:t.dept,title:t.title,compPct:res.compPct,compPctRaw:res.compPctRaw,achPct:res.achPct,fin:res.fin,growthScore:res.growthScore,contributionScore:res.contributionScore,finalWithGrowth:res.finalWithGrowth,fw:res.fw};
   }).sort(function(a,b){return (b.finalWithGrowth!=null?b.finalWithGrowth:-1)-(a.finalWithGrowth!=null?a.finalWithGrowth:-1);});
 
   var sel=ranked.find(function(r){return r.empNo===selEmpNo;})||null;
@@ -3442,7 +3621,7 @@ function FinalResultsDashboard(props) {
         <div className="rounded-2xl border border-slate-700/50 bg-slate-800 overflow-hidden shadow-xl">
           <table className="w-full text-sm">
             <thead className="bg-slate-900/60">
-              <tr>{["순위","이름/부서","업적점수","역량점수","업적가중치","역량가중치","합산점수","성장(가산)","최종점수"].map(function(h){return <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-400">{h}</th>;})}</tr>
+              <tr>{["순위","이름/부서","업적점수","역량점수","업적가중치","역량가중치","합산점수","성장(가산)","공헌도","최종점수"].map(function(h){return <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-400">{h}</th>;})}</tr>
             </thead>
             <tbody className="divide-y divide-slate-700/30">
               {ranked.map(function(r,i){return (
@@ -3460,6 +3639,7 @@ function FinalResultsDashboard(props) {
                   <td className="px-4 py-3 text-xs text-slate-400">{r.fw.comp+"%"}</td>
                   <td className="px-4 py-3 text-xs font-semibold text-slate-400">{r.fin!=null?r.fin:"—"}</td>
                   <td className="px-4 py-3 text-center">{r.growthScore!=null?<span className="text-sm font-bold text-green-400">+{r.growthScore}</span>:<span className="text-slate-600">-</span>}</td>
+                  <td className="px-4 py-3 text-center">{r.contributionScore!=null?<span className="text-sm font-bold text-amber-400">+{r.contributionScore}</span>:<span className="text-slate-600">-</span>}</td>
                   <td className="px-4 py-3">{r.finalWithGrowth!=null?<span className="text-xl font-black text-indigo-300">{r.finalWithGrowth}</span>:<span className="text-slate-600 text-xs">미집계</span>}</td>
                 </tr>
               );})}
@@ -3471,10 +3651,18 @@ function FinalResultsDashboard(props) {
   );
 }
 
-function KpiSetupView({currentUser,kpiItems,setKpiItems,kpiApproval,setKpiApproval,kpiChain,showToast,growthOptions,growthSelections,setGrowthSelections}) {
+function KpiSetupView({currentUser,kpiItems,setKpiItems,kpiApproval,setKpiApproval,kpiChain,showToast,growthOptions,growthSelections,setGrowthSelections,kpiTemplate}) {
   const empNo=currentUser.empNo;
   const approval=kpiApproval[empNo]||{status:"대기중",currentStageIdx:0,history:[]};
-  const [draft,setDraft]=useState((kpiItems[empNo]||[]).map(i=>({...i})));
+  const tplItems=(kpiTemplate&&kpiTemplate.items&&kpiTemplate.items.length>0)?kpiTemplate.items:null;
+  const initDraft=()=>{
+    if(tplItems){
+      const saved=kpiItems[empNo]||[];
+      return tplItems.map((t,i)=>({id:`kpi-${empNo}-tpl-${i}`,title:saved[i]?.title||"",weight:t.weight,desc:saved[i]?.desc||"",hint:t.hint||""}));
+    }
+    return (kpiItems[empNo]||[]).map(i=>({...i}));
+  };
+  const [draft,setDraft]=useState(initDraft);
   const [editingId,setEditingId]=useState(null);
   const [editForm,setEditForm]=useState({title:"",weight:10,desc:""});
   const [addForm,setAddForm]=useState({title:"",weight:10,desc:""});
@@ -3510,8 +3698,10 @@ function KpiSetupView({currentUser,kpiItems,setKpiItems,kpiApproval,setKpiApprov
   };
   const removeItem=id=>setDraft(p=>p.filter(i=>i.id!==id));
   const submit=()=>{
-    if(totalW!==100){showToast("배점 합계가 100점이어야 합니다.");return;}
+    const expectedW=tplItems?tplItems.reduce((s,t)=>s+t.weight,0):100;
+    if(totalW!==expectedW){showToast(`배점 합계가 ${expectedW}점이어야 합니다.`);return;}
     if(draft.length===0){showToast("KPI 항목을 1개 이상 추가하세요.");return;}
+    if(tplItems&&draft.some(i=>!i.title.trim())){showToast("모든 KPI 항목명을 입력하세요.");return;}
     setKpiItems(p=>({...p,[empNo]:draft}));
     setKpiApproval(p=>({...p,[empNo]:{...p[empNo],status:"제출됨",currentStageIdx:0,
       history:[...(p[empNo]?.history||[]),{stageIdx:-1,actor:empNo,action:"제출",comment:"",ts:new Date().toLocaleDateString()}]}}));
@@ -3604,9 +3794,9 @@ function KpiSetupView({currentUser,kpiItems,setKpiItems,kpiApproval,setKpiApprov
           <div className="px-5 py-4 border-b border-slate-700/50 flex items-center justify-between">
             <div>
               <h3 className="text-base font-bold text-slate-200">KPI 항목</h3>
-              <p className="text-[11px] text-slate-400 mt-0.5">항목별 최대 배점 30점 · 전체 합계 100점 필수</p>
+              {tplItems?<p className="text-[11px] text-amber-400 mt-0.5">📐 관리자 설정 {tplItems.length}개 항목 · 합계 {tplItems.reduce((s,t)=>s+t.weight,0)}점</p>:<p className="text-[11px] text-slate-400 mt-0.5">항목별 최대 배점 30점 · 전체 합계 100점 필수</p>}
             </div>
-            {canEdit&&<Btn sm onClick={()=>setShowAddForm(p=>!p)}>+ 항목 추가</Btn>}
+            {!tplItems&&canEdit&&<Btn sm onClick={()=>setShowAddForm(p=>!p)}>+ 항목 추가</Btn>}
           </div>
           <div className="divide-y divide-slate-50">
             {draft.length===0&&<div className="py-10 text-center text-slate-400"><div className="text-3xl mb-2">📝</div><p className="text-sm">KPI 항목을 추가하세요</p></div>}
@@ -3887,7 +4077,7 @@ function AchSelfDiagView({currentUser,kpiItems,achScores,setAchScores,kpiSelfTex
                   <div className="flex gap-3">
                     <button onClick={()=>setGS({selfDiagStatus:"완료"})}
                       className={`flex-1 rounded-xl border py-3 text-sm font-semibold transition ${gs.selfDiagStatus==="완료"?"border-green-500 bg-green-900/30 text-green-400":"border-slate-600 bg-slate-700 text-slate-400 hover:border-green-500"}`}>✓ 완료</button>
-                    <button onClick={()=>setGS({selfDiagStatus:"미완료"})}
+                    <button onClick={()=>setGS({selfDiagStatus:"미완료",...(gs.status==="완료"?{status:"제출됨",score:null}:{})})}
                       className={`flex-1 rounded-xl border py-3 text-sm font-semibold transition ${gs.selfDiagStatus==="미완료"?"border-red-500 bg-red-900/30 text-red-400":"border-slate-600 bg-slate-700 text-slate-400 hover:border-red-500"}`}>✕ 미완료</button>
                   </div>
                   {gs.selfDiagStatus&&(
@@ -4449,6 +4639,8 @@ function App() {
   const [evalType,setEvalType] = useState("역량"); // "역량"|"업적"
   const [achAssignments,setAchAssignments] = useState(()=>initAchAssignments());
   const [kpiItems,setKpiItems] = useState({});
+  const [kpiTemplate,setKpiTemplate] = useState({items:[]});
+  const [contributions,setContributions] = useState({});
   const [kpiApproval,setKpiApproval] = useState(()=>initKpiApproval());
   const [kpiChain,setKpiChain] = useState(()=>initKpiChain());
   const [kpiSelfText,setKpiSelfText] = useState({});
@@ -4525,6 +4717,10 @@ function App() {
           if(fsGrowth.growthSelections) setGrowthSelections(fsGrowth.growthSelections);
           if(fsGrowth.growthOptions)    setGrowthOptions(fsGrowth.growthOptions);
         }
+        const fsKpiTpl   = await window.FS.get("kpiTemplate");
+        const fsContrib  = await window.FS.get("contributions");
+        if(fsKpiTpl?.items) setKpiTemplate({items:fsKpiTpl.items});
+        if(fsContrib?.contributions) setContributions(fsContrib.contributions);
         if(fsSettings||fsScores) {
           setToast("☁️ 클라우드에서 데이터를 불러왔습니다.");
           setTimeout(()=>setToast(""),3000);
@@ -4574,6 +4770,16 @@ function App() {
     const t=setTimeout(()=>{ window.FS.set("growth",{growthSelections,growthOptions}); },1500);
     return()=>clearTimeout(t);
   },[growthSelections,growthOptions,storageLoaded]);
+  useEffect(()=>{
+    if(!storageLoaded) return;
+    const t=setTimeout(()=>{ window.FS.set("kpiTemplate",kpiTemplate); },1500);
+    return()=>clearTimeout(t);
+  },[kpiTemplate,storageLoaded]);
+  useEffect(()=>{
+    if(!storageLoaded) return;
+    const t=setTimeout(()=>{ window.FS.set("contributions",{contributions}); },1500);
+    return()=>clearTimeout(t);
+  },[contributions,storageLoaded]);
 
   const activePeople = allPeople.filter(p=>p.empStatus==="재직");
   const activeTargets = activePeople.filter(p=>p.empNo.startsWith("a"));
@@ -4834,7 +5040,9 @@ function App() {
             finalWeights={finalWeights} setFinalWeights={setFinalWeights}
             essayAnswers={essayAnswers}
             growthOptions={growthOptions} setGrowthOptions={setGrowthOptions}
-            growthSelections={growthSelections} setGrowthSelections={setGrowthSelections}/>
+            growthSelections={growthSelections} setGrowthSelections={setGrowthSelections}
+            kpiTemplate={kpiTemplate} setKpiTemplate={setKpiTemplate}
+            contributions={contributions} setContributions={setContributions}/>
         : evalType==="업적"
           ? (() => {
               const kpiConfirmed = isKpiConfirmed(kpiApproval, currentUser.empNo);
@@ -4845,19 +5053,24 @@ function App() {
                 if(!kpiConfirmed){
                   return <KpiSetupView currentUser={currentUser} kpiItems={kpiItems} setKpiItems={setKpiItems}
                     kpiApproval={kpiApproval} setKpiApproval={setKpiApproval} kpiChain={kpiChain} showToast={showToast}
-                    growthOptions={growthOptions} growthSelections={growthSelections} setGrowthSelections={setGrowthSelections}/>;
+                    growthOptions={growthOptions} growthSelections={growthSelections} setGrowthSelections={setGrowthSelections}
+                    kpiTemplate={kpiTemplate}/>;
                 }
                 return <AchSelfDiagView currentUser={currentUser} kpiItems={kpiItems}
                   achScores={achScores} setAchScores={setAchScores} kpiSelfText={kpiSelfText} setKpiSelfText={setKpiSelfText}
                   achProgress={achProgress} setAchProgress={setAchProgress} showToast={showToast}
-                  growthOptions={growthOptions} growthSelections={growthSelections} setGrowthSelections={setGrowthSelections}/>;
+                  growthOptions={growthOptions} growthSelections={growthSelections} setGrowthSelections={setGrowthSelections}
+            kpiTemplate={kpiTemplate} setKpiTemplate={setKpiTemplate}
+            contributions={contributions} setContributions={setContributions}/>;
               }
               // 타인평가 탭
               return <AchPeerEvalView currentUser={currentUser} kpiItems={kpiItems}
                 kpiApproval={kpiApproval} setKpiApproval={setKpiApproval} kpiChain={kpiChain}
                 achScores={achScores} setAchScores={setAchScores} achProgress={achProgress} setAchProgress={setAchProgress}
                 achAssignments={achAssignments} showToast={showToast} kpiSelfText={kpiSelfText}
-                growthOptions={growthOptions} growthSelections={growthSelections} setGrowthSelections={setGrowthSelections}/>;
+                growthOptions={growthOptions} growthSelections={growthSelections} setGrowthSelections={setGrowthSelections}
+            kpiTemplate={kpiTemplate} setKpiTemplate={setKpiTemplate}
+            contributions={contributions} setContributions={setContributions}/>;
             })()
           : evalTab==="selfDiag"&&showSelfDiagTab
           ? <SelfDiagView currentUser={currentUser} progressRows={progressRows} setProgressRows={setProgressRows}
