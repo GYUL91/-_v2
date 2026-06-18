@@ -775,10 +775,6 @@ function EvalForm({targetEmpNo,stage,evaluatorEmpNo,competencies,scores,setScore
         </div>
       )}
 
-      {/* 타인평가: 점수 참고 + 의견 */}
-      {!isSelfDiag && userRank>0 && (
-        <ScoreSummaryTable targetEmpNo={targetEmpNo} competencies={competencies} scores={scores} progressRows={progressRows} userRank={userRank} assignments={assignments}/>
-      )}
 
       {/* 객관식 역량 문항 */}
       {objComps.map(comp=>(
@@ -1132,7 +1128,7 @@ function ScoreSummaryTable({targetEmpNo,competencies,scores,progressRows,userRan
 
 // 문항별 참고 점수 뱃지
 function QuestionRef({targetEmpNo,compTitle,qi,userRank,scores,progressRows}) {
-  const visStages = ["본인진단",...STAGES.filter(s=>STAGE_RANK[s]<=userRank)];
+  const visStages = ["본인진단"];
   const items = visStages.map(s=>{
     const avg = getQStageAvg(scores,progressRows,targetEmpNo,s,compTitle,qi);
     if (!avg) return null;
@@ -2838,12 +2834,12 @@ function AdminView({assignments,setAssignments,progressRows,setProgressRows,
                           <p className="mt-1 text-xs text-slate-500">{c.desc}</p>
                           {c.type==="essay"
                             ? <div className="mt-2"><p className="text-xs text-violet-700 font-medium">Q. {c.question}</p><p className="text-[10px] text-slate-400 mt-1">최고 배점: {c.maxScore||30}점</p></div>
-                            : <>
+                            : <div>
                                 <p className="mt-2 text-[10px] font-semibold text-slate-400">1차/2차/3차평가·본인진단용</p>
                                 <ul className="mt-1 list-disc pl-4 space-y-1">{(c.questions||[]).map((q,qi)=><li key={qi} className="text-xs text-slate-500">{q}</li>)}</ul>
                                 <p className="mt-2 text-[10px] font-semibold text-slate-400">동료평가용</p>
-                                <ul className="mt-1 list-disc pl-4 space-y-1">{(c.peerQuestions?.length?c.peerQuestions:c.questions||[]).map((q,qi)=><li key={qi} className="text-xs text-slate-500">{q}</li>)}</ul>
-                              </>}
+                                <ul className="mt-1 list-disc pl-4 space-y-1">{(c.peerQuestions&&c.peerQuestions.length?c.peerQuestions:c.questions||[]).map((q,qi)=><li key={qi} className="text-xs text-slate-500">{q}</li>)}</ul>
+                              </div>}
                         </div>
                         <div className="flex gap-1.5">
                           <Btn sm onClick={()=>setEditComp({...c,_idx:i,_group:"leader"})}>✏ 수정</Btn>
