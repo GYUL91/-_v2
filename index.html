@@ -4676,7 +4676,9 @@ function App() {
       try {
         if(window._waitFirestore) await window._waitFirestore();
         // ── 1. Firestore에서 설정 로드 ──────────────────────
+        console.log("🔍 Firestore 로드 시작...");
         const fsSettings = await window.FS.get("settings");
+        console.log("🔍 settings:", fsSettings ? "있음" : "없음");
         if (fsSettings) {
           const p = k => { try { const v=fsSettings[k]; return v&&v!=="null"?JSON.parse(v):null; } catch(e){return null;} };
           const ra=p("hr_assignments"), rl=p("hr_leader_comp"), rm=p("hr_member_comp");
@@ -4708,6 +4710,7 @@ function App() {
         }
         // ── 2. Firestore에서 인메모리 데이터 로드 ─────────
         const fsScores   = await window.FS.get("scores");
+        console.log("🔍 scores:", fsScores?"있음":"없음", "users:", (await window.FS.get("users"))?"있음":"없음");
         const fsProgress = await window.FS.get("progress");
         const fsEssays   = await window.FS.get("essays");
         const fsUsers    = await window.FS.get("users");
@@ -4734,6 +4737,7 @@ function App() {
         const fsContrib  = await window.FS.get("contributions");
         if(fsKpiTpl?.items) setKpiTemplate({items:fsKpiTpl.items});
         if(fsContrib?.contributions) setContributions(fsContrib.contributions);
+        console.log("🔍 로드 결과 - settings:", !!fsSettings, "scores:", !!fsScores, "users:", !!fsUsers, "kpi:", !!fsKpi, "growth:", !!fsGrowth);
         if(fsSettings||fsScores) {
           setToast("☁️ 클라우드에서 데이터를 불러왔습니다.");
           setTimeout(()=>setToast(""),3000);
