@@ -34,22 +34,10 @@
   try {
     if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
     _db = firebase.firestore();
-    _db.settings({ experimentalForceLongPolling: true, merge: true });
     console.log("✅ Firebase 연결 성공");
   } catch(e) {
     console.warn("⚠️ Firebase 연결 실패 (로컬 모드):", e.message);
   }
-
-  // Firestore 연결 대기 함수
-  window._waitFirestore = async function() {
-    if (!_db) return;
-    await _db.enableNetwork();
-    return new Promise((resolve) => {
-      const unsub = _db.collection("hr_megaline").doc("settings")
-        .onSnapshot(() => { unsub(); resolve(); }, () => { unsub(); resolve(); });
-      setTimeout(resolve, 5000);
-    });
-  };
 
   window.FS = {
     COL: "hr_megaline",
@@ -4710,7 +4698,6 @@ function App() {
         }
         // ── 2. Firestore에서 인메모리 데이터 로드 ─────────
         const fsScores   = await window.FS.get("scores");
-        console.log("🔍 scores:", fsScores?"있음":"없음", "users:", (await window.FS.get("users"))?"있음":"없음");
         const fsProgress = await window.FS.get("progress");
         const fsEssays   = await window.FS.get("essays");
         const fsUsers    = await window.FS.get("users");
@@ -4737,7 +4724,6 @@ function App() {
         const fsContrib  = await window.FS.get("contributions");
         if(fsKpiTpl?.items) setKpiTemplate({items:fsKpiTpl.items});
         if(fsContrib?.contributions) setContributions(fsContrib.contributions);
-        console.log("🔍 로드 결과 - settings:", !!fsSettings, "scores:", !!fsScores, "users:", !!fsUsers, "kpi:", !!fsKpi, "growth:", !!fsGrowth);
         if(fsSettings||fsScores) {
           setToast("☁️ 클라우드에서 데이터를 불러왔습니다.");
           setTimeout(()=>setToast(""),3000);
