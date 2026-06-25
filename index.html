@@ -34,43 +34,70 @@
   try {
     if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
     _db = firebase.firestore();
-    _db.settings({ experimentalForceLongPolling: true });
-    console.log("✅ Firebase 연결 성공 (long polling)");
+    console.log("✅ Firebase 초기화 완료");
   } catch(e) {
-    console.warn("⚠️ Firebase 연결 실패 (로컬 모드):", e.message);
+    console.warn("⚠️ Firebase 초기화 실패:", e.message);
   }
 
+  // Firestore REST API 직접 통신 (SDK WebSocket 우회)
   window.FS = {
     COL: "hr_megaline",
+    BASE: "https://firestore.googleapis.com/v1/projects/" + FIREBASE_CONFIG.projectId + "/databases/(default)/documents",
+    KEY: FIREBASE_CONFIG.apiKey,
+    _toFS(v) {
+      if (v === null || v === undefined) return {nullValue: null};
+      if (typeof v === "string") return {stringValue: v};
+      if (typeof v === "number") return Number.isInteger(v) ? {integerValue: String(v)} : {doubleValue: v};
+      if (typeof v === "boolean") return {booleanValue: v};
+      if (Array.isArray(v)) return {arrayValue: {values: v.map(x => this._toFS(x))}};
+      if (typeof v === "object") { const f = {}; for (const k in v) f[k] = this._toFS(v[k]); return {mapValue: {fields: f}}; }
+      return {stringValue: String(v)};
+    },
+    _fromFS(v) {
+      if ("stringValue" in v) return v.stringValue;
+      if ("integerValue" in v) return Number(v.integerValue);
+      if ("doubleValue" in v) return v.doubleValue;
+      if ("booleanValue" in v) return v.booleanValue;
+      if ("nullValue" in v) return null;
+      if ("arrayValue" in v) return (v.arrayValue.values || []).map(x => this._fromFS(x));
+      if ("mapValue" in v) { const o = {}; const f = v.mapValue.fields || {}; for (const k in f) o[k] = this._fromFS(f[k]); return o; }
+      return null;
+    },
     async set(docName, data) {
-      if (!_db) return;
-      try { await _db.collection(this.COL).doc(docName).set(data, {merge: true}); }
-      catch(e) { console.warn("Firestore 저장 오류:", e); }
+      try {
+        const fields = {}; for (const k in data) fields[k] = this._toFS(data[k]);
+        const masks = Object.keys(data).map(k => "updateMask.fieldPaths=" + encodeURIComponent(k)).join("&");
+        await fetch(this.BASE + "/" + this.COL + "/" + docName + "?key=" + this.KEY + "&" + masks, {
+          method: "PATCH", headers: {"Content-Type": "application/json"}, body: JSON.stringify({fields})
+        });
+      } catch(e) { console.warn("Firestore 저장 오류:", e); }
     },
     async get(docName) {
-      if (!_db) return null;
       try {
-        const snap = await _db.collection(this.COL).doc(docName).get();
-        return snap.exists ? snap.data() : null;
+        const res = await fetch(this.BASE + "/" + this.COL + "/" + docName + "?key=" + this.KEY);
+        if (!res.ok) return null;
+        const doc = await res.json();
+        if (!doc.fields) return null;
+        const o = {}; for (const k in doc.fields) o[k] = this._fromFS(doc.fields[k]); return o;
       } catch(e) { console.warn("Firestore 읽기 오류:", e); return null; }
     }
   };
+  console.log("✅ Firestore REST API 모드 활성화");
 
   // localStorage.setItem 인터셉터: hr_ 키는 Firestore에도 자동 동기화
   const _origSet = localStorage.setItem.bind(localStorage);
   localStorage.setItem = function(key, value) {
     _origSet(key, value);
-    if (key.startsWith("hr_") && _db) {
+    if (key.startsWith("hr_")) {
       const payload = {}; payload[key] = value;
-      _db.collection("hr_megaline").doc("settings").set(payload, {merge:true}).catch(()=>{});
+      window.FS.set("settings", payload);
     }
   };
   const _origRemove = localStorage.removeItem.bind(localStorage);
   localStorage.removeItem = function(key) {
     _origRemove(key);
-    if (key.startsWith("hr_") && _db) {
-      const payload = {}; payload[key] = null;
-      _db.collection("hr_megaline").doc("settings").set(payload, {merge:true}).catch(()=>{});
+    if (key.startsWith("hr_")) {
+      window.FS.set("settings", {[key]: null});
     }
   };
   </script>
