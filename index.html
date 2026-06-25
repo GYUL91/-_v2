@@ -39,6 +39,17 @@
     console.warn("⚠️ Firebase 연결 실패 (로컬 모드):", e.message);
   }
 
+  // Firestore 연결 대기 함수
+  window._waitFirestore = async function() {
+    if (!_db) return;
+    await _db.enableNetwork();
+    return new Promise((resolve) => {
+      const unsub = _db.collection("hr_megaline").doc("settings")
+        .onSnapshot(() => { unsub(); resolve(); }, () => { unsub(); resolve(); });
+      setTimeout(resolve, 5000);
+    });
+  };
+
   window.FS = {
     COL: "hr_megaline",
     async set(docName, data) {
@@ -48,15 +59,10 @@
     },
     async get(docName) {
       if (!_db) return null;
-      for (let retry=0; retry<3; retry++) {
-        try {
-          const snap = await _db.collection(this.COL).doc(docName).get({source:'server'});
-          return snap.exists ? snap.data() : null;
-        } catch(e) {
-          if (retry<2) { await new Promise(r=>setTimeout(r, 1000*(retry+1))); continue; }
-          console.warn("Firestore 읽기 오류:", e); return null;
-        }
-      }
+      try {
+        const snap = await _db.collection(this.COL).doc(docName).get();
+        return snap.exists ? snap.data() : null;
+      } catch(e) { console.warn("Firestore 읽기 오류:", e); return null; }
     }
   };
 
@@ -4667,6 +4673,7 @@ function App() {
   useEffect(() => {
     async function loadData() {
       try {
+        if(window._waitFirestore) await window._waitFirestore();
         // ── 1. Firestore에서 설정 로드 ──────────────────────
         const fsSettings = await window.FS.get("settings");
         if (fsSettings) {
