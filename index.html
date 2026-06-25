@@ -48,10 +48,15 @@
     },
     async get(docName) {
       if (!_db) return null;
-      try {
-        const snap = await _db.collection(this.COL).doc(docName).get();
-        return snap.exists ? snap.data() : null;
-      } catch(e) { console.warn("Firestore 읽기 오류:", e); return null; }
+      for (let retry=0; retry<3; retry++) {
+        try {
+          const snap = await _db.collection(this.COL).doc(docName).get({source:'server'});
+          return snap.exists ? snap.data() : null;
+        } catch(e) {
+          if (retry<2) { await new Promise(r=>setTimeout(r, 1000*(retry+1))); continue; }
+          console.warn("Firestore 읽기 오류:", e); return null;
+        }
+      }
     }
   };
 
