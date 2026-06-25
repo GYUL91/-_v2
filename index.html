@@ -34,7 +34,8 @@
   try {
     if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
     _db = firebase.firestore();
-    console.log("✅ Firebase 연결 성공");
+    _db.settings({ experimentalForceLongPolling: true });
+    console.log("✅ Firebase 연결 성공 (long polling)");
   } catch(e) {
     console.warn("⚠️ Firebase 연결 실패 (로컬 모드):", e.message);
   }
