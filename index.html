@@ -72,14 +72,22 @@
         });
       } catch(e) { console.warn("Firestore 저장 오류:", e); }
     },
-    async get(docName) {
+    // 404(문서 없음)와 네트워크/서버 오류를 구분한다. 오류 시에는 null이 아니라 throw 하여
+    // 호출 측이 "데이터 없음"으로 착각해 빈 상태를 덮어쓰는(자동저장) 사고를 막는다.
+    async get(docName, retries) {
+      retries = retries == null ? 2 : retries;
       try {
         const res = await fetch(this.BASE + "/" + this.COL + "/" + docName + "?key=" + this.KEY);
-        if (!res.ok) return null;
+        if (res.status === 404) return null;
+        if (!res.ok) throw new Error("Firestore HTTP " + res.status);
         const doc = await res.json();
         if (!doc.fields) return null;
         const o = {}; for (const k in doc.fields) o[k] = this._fromFS(doc.fields[k]); return o;
-      } catch(e) { console.warn("Firestore 읽기 오류:", e); return null; }
+      } catch(e) {
+        if (retries > 0) { await new Promise(r => setTimeout(r, 500)); return this.get(docName, retries - 1); }
+        console.warn("Firestore 읽기 오류:", e);
+        throw e;
+      }
     }
   };
   console.log("✅ Firestore REST API 모드 활성화");
@@ -4808,10 +4816,14 @@ function App() {
           setToast("☁️ 클라우드에서 데이터를 불러왔습니다.");
           setTimeout(()=>setToast(""),3000);
         }
+        // 모든 읽기가 성공했을 때만 자동저장을 활성화한다.
+        // 여기서 실패한 채로 storageLoaded=true가 되면, 못 불러온 항목은 빈 상태로 자동저장되어
+        // 기존 클라우드 데이터를 덮어쓰는 사고로 이어진다 (실제 발생한 데이터 유실 원인).
+        setStorageLoaded(true);
       } catch(e) {
         console.warn("클라우드 로드 오류:", e);
-      } finally {
-        setStorageLoaded(true);
+        setToast("⚠️ 클라우드 연결에 실패했습니다. 새로고침 후 다시 시도하세요. (저장 비활성화됨)");
+
       }
     }
     loadData();
