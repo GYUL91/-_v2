@@ -480,6 +480,16 @@ function isAchUnlocked(achProg,kpiApproval,empNo,stage,achAsgn){
   }
   return true;
 }
+// 업적평가 진행현황 탭용 실효 상태 계산 (역량평가 getEffectiveStatus와 동일한 패턴)
+function getAchEffectiveStatus(achAsgn,achProg,kpiApproval,row){
+  if(row.stage==="자기진단"){
+    if(!isKpiConfirmed(kpiApproval,row.targetEmpNo)) return "KPI미확정";
+    return row.status;
+  }
+  if(!getAchEvaluators(achAsgn,row.targetEmpNo,row.stage).length) return "해당없음";
+  if(!isAchUnlocked(achProg,kpiApproval,row.targetEmpNo,row.stage,achAsgn)) return "권한대기";
+  return row.status==="권한대기"?"대기중":row.status;
+}
 function getValidKpiStages(chain, empNo) {
   var ch = chain[empNo] || {};
   return KPI_CONFIRM_STAGES.filter(function(s){ return (ch[s]||[]).filter(function(e){return e&&e!=="__NONE__";}).length>0; });
@@ -531,6 +541,7 @@ const STATUS_CLS = {
   "권한대기":"bg-slate-700/50 text-slate-400","해당없음":"bg-slate-700/30 text-slate-400",
   "대기중":"bg-blue-900/40 text-blue-400","평가가능":"bg-blue-900/40 text-blue-400",
   "잠김":"bg-slate-100 text-slate-400","스킵":"bg-zinc-100 text-zinc-400",
+  "KPI미확정":"bg-rose-900/40 text-rose-400",
 };
 function StatusBadge({status}) {
   return <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_CLS[status]||"bg-slate-700/50 text-slate-400"}`}>{status}</span>;
@@ -2160,7 +2171,7 @@ function AdminView({assignments,setAssignments,progressRows,setProgressRows,
   leaderCompetencies,setLeaderCompetencies,memberCompetencies,setMemberCompetencies,
   scores,showToast,allPeople,activePeople,activeTargets,updateEmpStatus,addEmployee,resetPassword,
   weights,setWeights,seasons,currentSeasonId,adminViewSeasonId,setAdminViewSeasonId,seasonArchive,closeSeason,startNewSeason,reopenSeason,deleteSeason,exportSettings,importSettings,
-  evalType,kpiChain,setKpiChain,kpiApproval,kpiItems,achProgress,achScores,achWeights,setAchWeights,
+  evalType,kpiChain,setKpiChain,kpiApproval,kpiItems,achProgress,setAchProgress,achScores,achWeights,setAchWeights,
   achAssignments,setAchAssignments,finalWeights,setFinalWeights,essayAnswers,
   growthOptions,setGrowthOptions,growthSelections,setGrowthSelections,
   kpiTemplate,setKpiTemplate,contributions,setContributions}) {
@@ -2217,6 +2228,7 @@ function AdminView({assignments,setAssignments,progressRows,setProgressRows,
   const TAB_LABEL = {"matching":"평가자 매칭","settings":"평가항목 설정","employees":"임직원 관리","season":"시즌 관리","dashboard":"진행현황","results":"평가 결과"};
   const [newYear,setNewYear] = useState(new Date().getFullYear());
   const [newPeriod,setNewPeriod] = useState("중간");
+  const [carryOverKpi,setCarryOverKpi] = useState(true);
   const [draftWeights,setDraftWeights] = useState(weights);
   const [weightsDirty,setWeightsDirty] = useState(false);
   const getDPW = (empNo) => draftWeights[empNo] !== undefined ? draftWeights[empNo] : {...WEIGHTS_DEFAULT};
@@ -2465,7 +2477,7 @@ function AdminView({assignments,setAssignments,progressRows,setProgressRows,
 
         {/* ── 업적평가 관리자 뷰 ── */}
         {evalType==="업적"&&(()=>{
-          const achTabs=[["achDashboard","📊 진행현황"],["kpiChainConfig","🔗 KPI 컨펌체인"],["kpiTemplate","📐 KPI 항목 설정"],["kpiManage","📋 KPI 관리"],["growthAdmin","🌱 성장평가 관리"],["achMatching","👤 평가자 매칭"],["achResults","📋 업적 결과"]];
+          const achTabs=[["achDashboard","✅ KPI 설정 현황"],["achProgress","📊 진행현황"],["kpiChainConfig","🔗 KPI 컨펌체인"],["kpiTemplate","📐 KPI 항목 설정"],["kpiManage","📋 KPI 관리"],["growthAdmin","🌱 성장평가 관리"],["achMatching","👤 평가자 매칭"],["achResults","📋 업적 결과"]];
           return (
             <div className="flex flex-1 flex-col overflow-hidden">
               <div className="border-b border-slate-700 bg-slate-800 px-6 py-3 flex items-center gap-2 flex-wrap">
@@ -2522,6 +2534,106 @@ function AdminView({assignments,setAssignments,progressRows,setProgressRows,
                     </div>
                   </div>
                 )}
+
+                {/* 업적평가 진행현황 (역량평가 진행현황과 동일한 패턴) */}
+                {achAdminTab==="achProgress"&&(()=>{
+                  const activeEmpNos2=new Set(activePeople.map(p=>p.empNo));
+                  const allAchRows=achProgress
+                    .filter(r=>activeEmpNos2.has(r.targetEmpNo))
+                    .map(r=>({
+                      ...r, target:getPerson(r.targetEmpNo),
+                      evaluatorNos: r.stage==="자기진단"?[r.targetEmpNo]:getAchEvaluators(achAssignments,r.targetEmpNo,r.stage),
+                      status: getAchEffectiveStatus(achAssignments,achProgress,kpiApproval,r),
+                      unlocked: r.stage==="자기진단"?isKpiConfirmed(kpiApproval,r.targetEmpNo):isAchUnlocked(achProgress,kpiApproval,r.targetEmpNo,r.stage,achAssignments),
+                    }));
+                  const achCompleted=allAchRows.filter(r=>r.status==="완료").length;
+                  const achActive=allAchRows.filter(r=>r.status==="대기중"||r.status==="작성중").length;
+                  const achLocked=allAchRows.filter(r=>r.status==="권한대기"||r.status==="KPI미확정").length;
+                  const achSkipped=allAchRows.filter(r=>r.status==="해당없음").length;
+                  const filteredAchRows=allAchRows.filter(r=>[r.target.empNo,r.target.name,r.target.dept,r.stage,r.status].join(" ").includes(search));
+                  return (
+                    <div className="max-w-6xl mx-auto space-y-4">
+                      <div className="grid grid-cols-5 gap-3">
+                        <StatCard icon="👥" label="총 평가건수" value={allAchRows.length} sub={`재직자 ${activeTargets.length}명 × 4단계`}/>
+                        <StatCard icon="✅" label="완료" value={achCompleted} sub={`완료율 ${Math.round(achCompleted/Math.max(1,allAchRows.length-achSkipped)*100)}%`}/>
+                        <StatCard icon="⏱" label="진행가능" value={achActive} sub="대기중·작성중"/>
+                        <StatCard icon="🔒" label="권한대기" value={achLocked} sub="KPI미확정·이전단계 대기"/>
+                        <StatCard icon="⚠" label="해당없음" value={achSkipped} sub="평가자 없음"/>
+                      </div>
+                      <div className="rounded-2xl border border-slate-700/50 bg-slate-800 p-5 shadow-xl">
+                        <div className="mb-4"><h2 className="text-lg font-bold">업적평가 진행 현황</h2>
+                          <p className="mt-0.5 text-xs text-slate-500">재직자 기준 · KPI 확정 → 자기진단 → 1차 → 2차 → 3차 순서로 진행됩니다.</p></div>
+                        <div className="relative mb-4">
+                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">🔍</span>
+                          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="피평가자, 단계, 상태 검색"
+                            className="h-9 w-full rounded-xl border border-slate-600 pl-9 pr-3 text-sm focus:outline-none focus:border-indigo-500"/>
+                        </div>
+                        <div className="overflow-auto rounded-xl border border-slate-700/50">
+                          <table className="w-full text-sm" style={{minWidth:900}}>
+                            <thead className="bg-slate-50 text-xs text-slate-500">
+                              <tr>{["피평가자","평가단계","평가자","권한","진행률","상태","완료자 (합산점수)","평가해제"].map(h=><th key={h} className="px-4 py-3 text-left font-semibold">{h}</th>)}</tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-50">
+                              {filteredAchRows.map(r=>{
+                                const items2=kpiItems[r.target.empNo]||[];
+                                return (
+                                <tr key={r.id} className="hover:bg-slate-700">
+                                  <td className="px-4 py-3 font-medium">{r.target.empNo} · {r.target.name}<div className="text-xs text-slate-400">{r.target.dept} · {r.target.title}</div></td>
+                                  <td className="px-4 py-3">{r.stage==="자기진단"?<span className="font-medium text-amber-600">자기진단</span>:r.stage}</td>
+                                  <td className="px-4 py-3 text-xs text-slate-500">{r.evaluatorNos.map(n=>getPerson(n).name).join(", ")||"없음"}</td>
+                                  <td className="px-4 py-3"><StatusBadge status={r.status==="해당없음"?"스킵":r.unlocked?"평가가능":"잠김"}/></td>
+                                  <td className="px-4 py-3"><div className="h-1.5 w-20 rounded-full bg-slate-700/50 overflow-hidden"><div className="h-full rounded-full bg-slate-900" style={{width:`${r.progress}%`}}/></div><span className="text-[11px] text-slate-400 mt-1 block">{r.progress}%</span></td>
+                                  <td className="px-4 py-3"><StatusBadge status={r.status}/></td>
+                                  <td className="px-4 py-3 text-xs">
+                                    {(r.completedBy||[]).length===0?<span className="text-slate-300">-</span>:
+                                      (r.completedBy||[]).map(evNo=>{
+                                        let total=null;
+                                        if(items2.length){let t=0,ok=true;for(const it of items2){const v=achScores[SKA(r.target.empNo,r.stage,evNo,it.id)];if(v==null){ok=false;break;}t+=v;}total=ok?t:null;}
+                                        return <div key={evNo} className="text-slate-600">{getPerson(evNo).name}{total!==null?<span className="ml-1 font-semibold text-slate-200">({total}점)</span>:<span className="text-slate-400"> (-)</span>}</div>;
+                                      })
+                                    }
+                                  </td>
+                                  <td className="px-4 py-3">
+                                    {(r.completedBy||[]).length>0?(
+                                      <div className="flex flex-col gap-1">
+                                        {(r.completedBy||[]).map(evNo=>{
+                                          const evName=getPerson(evNo).name;
+                                          return (
+                                            <button key={evNo}
+                                              onClick={()=>{
+                                                setConfirmModal({
+                                                  message:`${r.target.name}에 대한 ${evName}의 업적평가를 해제하시겠습니까?\n해제 시 해당 평가자는 다시 평가할 수 있게 됩니다.`,
+                                                  onConfirm:()=>{
+                                                    setAchProgress(prev=>prev.map(row=>{
+                                                      if (row.id!==r.id) return row;
+                                                      const newCompletedBy=(row.completedBy||[]).filter(e=>e!==evNo);
+                                                      const req=getAchEvaluators(achAssignments,row.targetEmpNo,row.stage);
+                                                      const newStatus=newCompletedBy.length===0?'권한대기':'작성중';
+                                                      const newProgress=req.length?Math.round(newCompletedBy.length/req.length*100):0;
+                                                      return {...row,completedBy:newCompletedBy,status:newStatus,progress:newProgress};
+                                                    }));
+                                                    showToast(`${evName}의 ${r.target.name} 업적 ${r.stage} 평가가 해제되었습니다.`);
+                                                  }
+                                                });
+                                              }}
+                                              className="inline-flex items-center gap-1 rounded-lg border border-red-100 bg-red-50 px-2 py-0.5 text-[10px] font-medium text-red-600 hover:bg-red-100 whitespace-nowrap">
+                                              {evName} ✕
+                                            </button>
+                                          );
+                                        })}
+                                      </div>
+                                    ):<span className="text-slate-300 text-xs">-</span>}
+                                  </td>
+                                </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* KPI 컨펌체인 설정 */}
                 {achAdminTab==="kpiChainConfig"&&(
@@ -3336,12 +3448,26 @@ function AdminView({assignments,setAssignments,progressRows,setProgressRows,
                     </select>
                   </div>
                   <div className="text-sm text-slate-500 pb-2">{newYear}년 메가라인 {newPeriod} 인사평가</div>
+                </div>
+                {(()=>{const cs=seasons.find(s=>s.id===currentSeasonId);const hasCarry=cs&&seasonArchive[cs.id]&&((Object.keys(seasonArchive[cs.id].kpiItems||{}).length>0)||(Object.keys(seasonArchive[cs.id].growthSelections||{}).length>0));
+                  return hasCarry?(
+                    <label className="mt-3 flex items-start gap-2 rounded-xl border border-indigo-700/30 bg-indigo-900/10 px-3 py-2.5 cursor-pointer">
+                      <input type="checkbox" checked={carryOverKpi} onChange={e=>setCarryOverKpi(e.target.checked)} className="mt-0.5"/>
+                      <span className="text-xs text-slate-300">
+                        <strong className="text-indigo-300">"{cs.name}"</strong>에서 설정된 <strong>KPI 항목</strong>과 <strong>성장평가 항목</strong>을 새 시즌으로 이월합니다.
+                        <br/><span className="text-slate-500">항목 내용(제목·설명·배점)만 가져오고, 승인상태·평가점수·완료여부는 모두 새로 시작합니다.</span>
+                      </span>
+                    </label>
+                  ):null;
+                })()}
+                <div className="mt-4">
                   <Btn primary onClick={()=>{
                     const sid=`${newYear}-${newPeriod}`;
                     if(seasons.find(s=>s.id===sid)){showToast("이미 존재하는 시즌입니다.");return;}
                     if(!window.confirm(`"${newYear}년 메가라인 ${newPeriod} 역량평가"를 시작하시겠습니까?`)) return;
-                    startNewSeason(newYear,newPeriod);
-                    showToast(`${newYear}년 ${newPeriod} 역량평가 시즌이 시작되었습니다.`);
+                    const cs=seasons.find(s=>s.id===currentSeasonId);
+                    startNewSeason(newYear,newPeriod,carryOverKpi&&cs?cs.id:null);
+                    showToast(`${newYear}년 ${newPeriod} 시즌이 시작되었습니다.`+(carryOverKpi&&cs?" KPI/성장평가 항목이 이월되었습니다.":""));
                   }}>▶ 새 시즌 시작</Btn>
                 </div>
               </div>
@@ -4977,11 +5103,17 @@ function App() {
         try{localStorage.setItem("hr_seasons",JSON.stringify(next));}catch(e){}
         return next;
       });
-      // 데이터도 초기화
+      // 데이터도 초기화 (역량평가 + 업적평가 + 성장평가)
       setAssignments(initAssignments());
       setProgressRows(initProgress());
       setScores({});
       setEssayAnswers({});
+      setKpiItems({});
+      setKpiApproval(initKpiApproval());
+      setKpiSelfText({});
+      setAchScores({});
+      setAchProgress(initAchievementProgress());
+      setGrowthSelections({});
       try{localStorage.removeItem("hr_assignments");}catch(e){}
     }
     if(adminViewSeasonId===seasonId) setAdminViewSeasonId(currentSeasonId);
@@ -4995,6 +5127,12 @@ function App() {
       setProgressRows(archived.progressRows||initProgress());
       setScores(archived.scores||{});
       setEssayAnswers(archived.essayAnswers||{});
+      setKpiItems(archived.kpiItems||{});
+      setKpiApproval(archived.kpiApproval||initKpiApproval());
+      setKpiSelfText(archived.kpiSelfText||{});
+      setAchScores(archived.achScores||{});
+      setAchProgress(archived.achProgress||initAchievementProgress());
+      setGrowthSelections(archived.growthSelections||{});
       try {
         localStorage.setItem("hr_assignments", JSON.stringify(archived.assignments||[]));
       } catch(e){}
@@ -5011,7 +5149,8 @@ function App() {
     showToast("시즌 마감이 해제되었습니다.");
   };
   const closeSeason = (seasonId) => {
-    const archived = {assignments,progressRows,scores,essayAnswers};
+    const archived = {assignments,progressRows,scores,essayAnswers,
+      kpiItems,kpiApproval,kpiSelfText,achScores,achProgress,growthSelections};
     setSeasonArchive(prev=>{
       const next={...prev,[seasonId]:archived};
       try{localStorage.setItem("hr_season_archive",JSON.stringify(next));}catch(e){}
@@ -5024,7 +5163,9 @@ function App() {
     });
     showToast("시즌이 마감되었습니다.");
   };
-  const startNewSeason = (year,period) => {
+  // carryOverFromSeasonId를 넘기면 그 시즌(보통 방금 마감한 시즌)의 KPI 항목·성장평가 항목을
+  // "내용만" 새 시즌으로 복사한다. 승인상태·점수·완료여부는 항상 새로 시작한다.
+  const startNewSeason = (year,period,carryOverFromSeasonId) => {
     const ns = makeSeason(year,period);
     setSeasons(prev=>{const next=[...prev,ns];try{localStorage.setItem("hr_seasons",JSON.stringify(next));}catch(e){}return next;});
     setCurrentSeasonId(ns.id);
@@ -5034,6 +5175,28 @@ function App() {
     setProgressRows(initProgress());
     setScores({});
     setEssayAnswers({});
+    setKpiApproval(initKpiApproval());
+    setKpiSelfText({});
+    setAchScores({});
+    setAchProgress(initAchievementProgress());
+
+    const src = carryOverFromSeasonId ? seasonArchive[carryOverFromSeasonId] : null;
+    if(src){
+      const carriedKpiItems={};
+      Object.keys(src.kpiItems||{}).forEach(empNo=>{
+        carriedKpiItems[empNo]=(src.kpiItems[empNo]||[]).map(it=>({id:it.id,title:it.title,desc:it.desc,weight:it.weight}));
+      });
+      setKpiItems(carriedKpiItems);
+      const carriedGrowth={};
+      Object.keys(src.growthSelections||{}).forEach(empNo=>{
+        const gs=src.growthSelections[empNo];
+        if(gs&&gs.optionId) carriedGrowth[empNo]={optionId:gs.optionId,optionTitle:gs.optionTitle,description:gs.description,status:"작성중"};
+      });
+      setGrowthSelections(carriedGrowth);
+    } else {
+      setKpiItems({});
+      setGrowthSelections({});
+    }
     try{localStorage.removeItem("hr_assignments");localStorage.removeItem("hr_weights");}catch(e){}
   };
   const showToast = msg => { setToast(msg); setTimeout(()=>setToast(""),3500); };
@@ -5129,7 +5292,7 @@ function App() {
             closeSeason={closeSeason} startNewSeason={startNewSeason} reopenSeason={reopenSeason} deleteSeason={deleteSeason}
             exportSettings={exportSettings} importSettings={importSettings}
             evalType={evalType} kpiChain={kpiChain} setKpiChain={setKpiChain}
-            kpiApproval={kpiApproval} kpiItems={kpiItems} achProgress={achProgress}
+            kpiApproval={kpiApproval} kpiItems={kpiItems} achProgress={achProgress} setAchProgress={setAchProgress}
             achScores={achScores} achWeights={achWeights} setAchWeights={setAchWeights}
             achAssignments={achAssignments} setAchAssignments={setAchAssignments}
             finalWeights={finalWeights} setFinalWeights={setFinalWeights}
